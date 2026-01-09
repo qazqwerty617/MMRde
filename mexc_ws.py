@@ -29,7 +29,49 @@ class MEXCWebSocket:
         self._subscribed_symbols: set[str] = set()
         self._listen_task: Optional[asyncio.Task] = None
     
-    # ... (properties) ...
+    @property
+    def prices(self) -> dict[str, float]:
+        """Get current price snapshot"""
+        return self._prices.copy()
+    
+    def get_price(self, symbol: str) -> Optional[float]:
+        """Get price for specific symbol"""
+        return self._prices.get(symbol)
+    
+    async def connect(self):
+        """Connect to WebSocket"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        
+        try:
+            self._ws = await self._session.ws_connect(
+                MEXC_WS_URL,
+                heartbeat=30,
+                receive_timeout=60
+            )
+            self._running = True
+            logger.info("✅ MEXC WebSocket connected")
+            return True
+        except Exception as e:
+            logger.error(f"WebSocket connection failed: {e}")
+            return False
+    
+    async def subscribe_tickers(self, symbols: list[str] = None):
+        """
+        Subscribe to ticker updates.
+        If symbols is None, subscribes to ALL tickers.
+        """
+        if not self._ws:
+            return
+        
+        # Subscribe to all tickers at once (more efficient)
+        sub_msg = {
+            "method": "sub.tickers",
+            "param": {}
+        }
+        
+        await self._ws.send_json(sub_msg)
+        logger.info("📡 Subscribed to all MEXC tickers")
 
     async def listen(self):
         """Main listening loop - Robust & Single-threaded per instance"""

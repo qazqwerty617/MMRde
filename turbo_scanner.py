@@ -1,10 +1,12 @@
 """
-Turbo Scanner v3.0
-Ultra-fast arbitrage scanner with:
-- WebSocket real-time prices (no REST delay)
-- Parallel DEX requests
-- Smart caching
-- Instant signal detection
+Turbo Scanner v4.0 - ULTRA INTELLIGENT EDITION
+Advanced Lead-Lag arbitrage scanner with:
+- Funding rate cost calculation
+- Convergence speed analysis
+- DEX momentum tracking
+- Token intelligence scoring
+- Optimal entry validation
+- Real-time WebSocket prices
 """
 import asyncio
 import logging
@@ -25,6 +27,13 @@ from database import save_signal, check_signal_exists, save_price_history
 from pair_manager import PairManager
 from token_validator import get_validator
 
+# NEW: Intelligence modules
+from funding_tracker import get_funding_tracker, FundingTracker
+from convergence_analyzer import get_convergence_analyzer, ConvergenceAnalyzer
+from momentum_tracker import get_momentum_tracker, MomentumTracker
+from token_intelligence import get_token_intelligence, TokenIntelligence
+from entry_validator import get_entry_validator, EntryValidator
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,12 +51,18 @@ class ArbitrageSignal:
     volume_24h: float = 0
     order_book_depth: float = 0
     detected_at: float = field(default_factory=time.time)
+    # NEW: Intelligence data
+    quality_score: float = 5.0
+    funding_cost: float = 0
+    momentum_strength: float = 0
+    entry_quality: float = 5.0
+    convergence_time_est: float = 0  # Estimated time to converge (seconds)
 
 
 class TurboScanner:
     """
     Ultra-fast scanner using WebSocket + parallel requests.
-    Detects opportunities in milliseconds, not seconds.
+    v4.0: Enhanced with intelligence modules for better signal quality.
     """
     
     def __init__(self, mexc_client: MEXCClient, dexscreener_client: DexScreenerClient):
@@ -57,10 +72,20 @@ class TurboScanner:
         self.validator = get_validator()
         self.ws = get_ws_client()
         
+        # NEW: Intelligence modules
+        self.funding_tracker = get_funding_tracker()
+        self.convergence_analyzer = get_convergence_analyzer()
+        self.momentum_tracker = get_momentum_tracker()
+        self.token_intelligence = get_token_intelligence()
+        self.entry_validator = get_entry_validator()
+        
+        # Connect entry validator to WebSocket
+        self.entry_validator.set_ws_client(self.ws)
+        
         # Caching for speed
-        self._dex_cache: Dict[str, dict] = {}  # {pair_addr: pair_data}
+        self._dex_cache: Dict[str, dict] = {}
         self._cache_time: Dict[str, float] = {}
-        self._cache_ttl = 5  # 5 second cache
+        self._cache_ttl = 5
         
         # Signal cooldowns (prevent spam)
         self._signal_cooldowns: Dict[str, float] = {}
@@ -68,15 +93,35 @@ class TurboScanner:
         
         self._discovery_task = None
         self._ws_started = False
+        self._funding_loaded = False
+        
+        # Quality thresholds
+        self.min_quality_score = 4.0  # Minimum token intelligence score
+        self.min_entry_quality = 3.0  # Minimum entry timing quality
+    
+    async def initialize_intelligence(self):
+        """Load intelligence data from database and APIs"""
+        try:
+            # Load funding rates
+            await self.funding_tracker.fetch_all_funding_rates()
+            self._funding_loaded = True
+            logger.info("✅ Funding rates loaded")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not load funding rates: {e}")
+        
+        # Note: Convergence and Token Intelligence are loaded from DB in main.py
     
     async def start_ws(self):
         """Initialize WebSocket connection"""
         if not self._ws_started:
             await self.ws.start()
             self._ws_started = True
-            # Wait for initial prices
             await asyncio.sleep(2)
             logger.info(f"📊 WebSocket loaded {len(self.ws.prices)} prices")
+            
+            # Initialize intelligence after WS is connected
+            if not self._funding_loaded:
+                asyncio.create_task(self.initialize_intelligence())
     
     async def start_discovery(self, tickers: dict[str, float]):
         """Start background pair discovery"""
@@ -98,8 +143,8 @@ class TurboScanner:
     
     async def scan(self) -> List[ArbitrageSignal]:
         """
-        TURBO SCAN - Ultra fast scanning
-        Uses WebSocket prices + parallel DEX requests
+        TURBO SCAN v4.0 - Intelligent scanning
+        Uses WebSocket prices + parallel DEX requests + intelligence filters
         """
         signals = []
         start_time = time.time()
@@ -117,6 +162,10 @@ class TurboScanner:
         
         if not mexc_prices:
             return []
+        
+        # Record prices for entry validation
+        for symbol, price in mexc_prices.items():
+            self.entry_validator.record_price(symbol, price)
         
         # Background discovery
         await self.start_discovery(mexc_prices)
@@ -139,6 +188,9 @@ class TurboScanner:
             for result in results:
                 if isinstance(result, list):
                     signals.extend(result)
+        
+        # Sort by quality score (best first)
+        signals.sort(key=lambda s: s.quality_score, reverse=True)
         
         scan_time = (time.time() - start_time) * 1000
         if signals:
@@ -174,11 +226,11 @@ class TurboScanner:
         chain: str,
         mexc_prices: Dict[str, float]
     ) -> Optional[ArbitrageSignal]:
-        """Process single pair - optimized for speed"""
+        """Process single pair with FULL intelligence pipeline"""
         symbol = pair.get("symbol", "")
         dex_price = pair.get("price_usd", 0)
         
-        # Quick filters first (fast rejection)
+        # ===== STAGE 1: Quick filters (fast rejection) =====
         if not symbol or symbol in TOKEN_BLACKLIST:
             return None
         if symbol not in mexc_prices:
@@ -201,26 +253,62 @@ class TurboScanner:
         if self._is_on_cooldown(symbol, direction):
             return None
         
-        # SAVE PRICE HISTORY (throttled) - restoring charts
-        # Save history for valid tokens even if spread is small, to build chart data
+        # ===== STAGE 2: Track momentum =====
+        momentum = self.momentum_tracker.analyze_momentum(symbol, dex_price)
+        
+        # ===== STAGE 3: Token Intelligence check =====
+        should_signal, intel_reason = self.token_intelligence.should_signal(
+            symbol, direction, 
+            min_score=self.min_quality_score,
+            min_win_rate=0.35
+        )
+        if not should_signal:
+            logger.debug(f"[INTEL] Skip {symbol}: {intel_reason}")
+            return None
+        
+        # ===== STAGE 4: Convergence check =====
+        should_signal, conv_reason = self.convergence_analyzer.should_signal(
+            symbol, min_score=self.min_quality_score
+        )
+        if not should_signal:
+            logger.debug(f"[CONVERGENCE] Skip {symbol}: {conv_reason}")
+            return None
+        
+        # ===== STAGE 5: Momentum confirmation =====
+        momentum_ok, momentum_reason = self.momentum_tracker.confirms_direction(
+            symbol, direction, min_strength=2.0
+        )
+        if not momentum_ok:
+            logger.debug(f"[MOMENTUM] Skip {symbol}: {momentum_reason}")
+            return None
+        
+        # ===== STAGE 6: Entry validation =====
+        entry_ok, entry_reason = self.entry_validator.validate_entry(
+            symbol, direction, abs_spread, max_movement=0.5
+        )
+        if not entry_ok:
+            logger.debug(f"[ENTRY] Skip {symbol}: {entry_reason}")
+            return None
+        
+        entry_quality = self.entry_validator.get_entry_quality(symbol, direction, abs_spread)
+        if entry_quality < self.min_entry_quality:
+            return None
+        
+        # Save price history for charts
         now = time.time()
         last_save = self._cache_time.get(f"history_{symbol}", 0)
-        if now - last_save > 60:  # Save once per minute
+        if now - last_save > 60:
             await save_price_history(
-                token=symbol,
-                chain=chain,
-                cex_price=mexc_price,
-                dex_price=dex_price,
+                token=symbol, chain=chain,
+                cex_price=mexc_price, dex_price=dex_price,
                 spread_percent=spread
             )
             self._cache_time[f"history_{symbol}"] = now
         
-        # Token validation
+        # ===== STAGE 7: Standard validation =====
         is_valid, reason = self.validator.validate_token(
-            symbol=symbol,
-            chain=chain,
-            dex_price=dex_price,
-            mexc_price=mexc_price,
+            symbol=symbol, chain=chain,
+            dex_price=dex_price, mexc_price=mexc_price,
             spread_percent=abs_spread
         )
         if not is_valid:
@@ -239,9 +327,16 @@ class TurboScanner:
         if liquidity > 0 and (volume_24h / liquidity) < 0.05:
             return None
         
-        # Net profit check
-        net_profit = self.validator.calculate_net_profit(abs_spread)
-        if net_profit < 3.0:  # Minimum 3% after fees
+        # ===== STAGE 8: Calculate NET profit with funding =====
+        gross_profit = self.validator.calculate_net_profit(abs_spread)
+        
+        # Get funding rate adjustment
+        funding_cost = self.funding_tracker.get_funding_adjustment(symbol, direction)
+        
+        # Adjusted net profit
+        net_profit = gross_profit - funding_cost
+        
+        if net_profit < 3.0:  # Minimum 3% after ALL costs
             return None
         
         # FDV check
@@ -249,7 +344,7 @@ class TurboScanner:
         if fdv > 0 and fdv < MIN_FDV_USD:
             return None
 
-        # Min Transactions Check (Anti-Bot/Wash Trading)
+        # Min Transactions Check
         txns = pair.get("txns", {}).get("h24", {})
         total_txns = txns.get("buys", 0) + txns.get("sells", 0)
         if total_txns < MIN_TXNS_24H:
@@ -257,33 +352,51 @@ class TurboScanner:
 
         # Name/Symbol Spam Filter
         name_lower = pair.get("baseToken", {}).get("name", "").lower()
-        if "test" in name_lower or "harry" in name_lower or "potter" in name_lower: # Common scam patterns
+        if "test" in name_lower or "harry" in name_lower or "potter" in name_lower:
             return None
         
-        # Wrapped Token Filter (only native allowed)
+        # Wrapped Token Filter
         if "wrapped" in name_lower and symbol not in MAJOR_TOKENS:
-             if "sol" not in name_lower and "eth" not in name_lower: # Allow WBTC/WETH/WSOL context but filter rare wrapped
+             if "sol" not in name_lower and "eth" not in name_lower:
                  return None
         
         # Database duplicate check
         if await check_signal_exists(symbol, direction):
             return None
         
-        # Get order book depth (async, non-blocking)
+        # Order book depth check (with timeout)
         order_book_depth = 0
         try:
             ob = await asyncio.wait_for(
                 self.mexc.get_order_book_depth(symbol, 5000),
-                timeout=1.0  # 1 second timeout
+                timeout=1.0
             )
             if ob:
                 order_book_depth = ob.get("depth_usd", 0)
                 if order_book_depth < 10_000:
                     return None
         except asyncio.TimeoutError:
-            pass  # Skip order book check if too slow
+            pass
         
-        # Create signal
+        # ===== STAGE 9: Calculate final quality score =====
+        token_score = self.token_intelligence.get_score(symbol)
+        convergence_score = self.convergence_analyzer.get_priority_score(symbol)
+        momentum_bonus = self.momentum_tracker.get_momentum_bonus(symbol, direction)
+        
+        quality_score = (
+            token_score * 0.3 +
+            convergence_score * 0.3 +
+            entry_quality * 0.2 +
+            (net_profit * 0.5) * 0.2  # Profit contributes to score
+        ) * momentum_bonus
+        
+        quality_score = min(10, max(0, quality_score))
+        
+        # Get estimated convergence time
+        conv_stats = self.convergence_analyzer.get_stats(symbol)
+        convergence_time_est = conv_stats.avg_convergence_time_sec if conv_stats else 0
+        
+        # Create signal with intelligence data
         signal = ArbitrageSignal(
             token=symbol,
             direction=direction,
@@ -295,7 +408,12 @@ class TurboScanner:
             chain=chain,
             liquidity_usd=liquidity,
             volume_24h=volume_24h,
-            order_book_depth=order_book_depth
+            order_book_depth=order_book_depth,
+            quality_score=round(quality_score, 1),
+            funding_cost=funding_cost,
+            momentum_strength=momentum.strength if momentum else 0,
+            entry_quality=entry_quality,
+            convergence_time_est=convergence_time_est
         )
         
         # Save to DB and set cooldown
@@ -305,7 +423,8 @@ class TurboScanner:
         logger.info(
             f"🚀 SIGNAL: {direction} ${symbol} | "
             f"Net: +{net_profit:.1f}% | "
-            f"Spread: {abs_spread:.1f}%"
+            f"Quality: {quality_score:.1f}/10 | "
+            f"Entry: {entry_quality:.1f}"
         )
         
         return signal
@@ -328,7 +447,6 @@ class TurboScanner:
             withdraw_enabled=dep_status.get("withdraw_enabled", False)
         )
         
-        # Save price (optional for stats, but not needed for chart anymore)
         await save_price_history(
             token=signal.token,
             chain=signal.chain,
@@ -339,24 +457,58 @@ class TurboScanner:
 
 
 def format_turbo_signal(signal: ArbitrageSignal, token_stats: dict = None) -> str:
-    """Format signal - MINIMALIST MODE"""
+    """Format signal - BALANCED MODE (Best of both worlds)"""
     chain = get_chain_display_name(signal.chain)
     
     if signal.direction == "LONG":
-        header = f"🟢 <b>LONG #{signal.token}</b>"
-        action = "SPOT Buy -> FUTURES Short"
+        header = f"🟢 <b>LONG #{signal.token}</b> | +{signal.net_profit:.1f}%"
+        desc = "MEXC Futures Opportunity"
     else:
-        header = f"🔴 <b>SHORT #{signal.token}</b>"
-        action = "SPOT Sell -> FUTURES Long"
-
+        header = f"🔴 <b>SHORT #{signal.token}</b> | +{signal.net_profit:.1f}%"
+        desc = "MEXC Futures Opportunity"
+    
+    # Quality text with indicators
+    if signal.quality_score >= 8:
+        quality_str = "🔥 Excellent"
+    elif signal.quality_score >= 6:
+        quality_str = "✅ Good"
+    elif signal.quality_score >= 4:
+        quality_str = "⚠️ Moderate"
+    else:
+        quality_str = "❓ Low"
+    
+    # Time estimation
+    if signal.convergence_time_est > 0:
+        if signal.convergence_time_est >= 3600:
+            time_str = f"{signal.convergence_time_est / 3600:.1f}h"
+        elif signal.convergence_time_est >= 60:
+            time_str = f"{signal.convergence_time_est / 60:.0f}m"
+        else:
+            time_str = f"{signal.convergence_time_est:.0f}s"
+        time_info = f" • ⏱️ ~{time_str}"
+    else:
+        time_info = ""
+    
+    # Funding info compact
+    funding_info = ""
+    if abs(signal.funding_cost) > 0.05:
+        if signal.funding_cost > 0:
+            funding_info = f" • 💸 -{signal.funding_cost:.2f}%"
+        else:
+            funding_info = f" • 💰 +{abs(signal.funding_cost):.2f}%"
+    
+    # Compact liquidity
+    liq_str = f"${signal.liquidity_usd/1000:.0f}k" if signal.liquidity_usd > 1000 else f"${signal.liquidity_usd:.0f}"
+    
     return (
         f"{header}\n"
-        f"Strategy: {action}\n\n"
-        f"💵 <b>Profit: +{signal.net_profit:.1f}%</b> (Gap: {signal.spread_percent:.1f}%)\n"
-        f"📉 MEXC: ${signal.mexc_price}\n"
-        f"📈 DEX: ${signal.dex_price}\n\n"
-        f"💧 Liq: ${signal.liquidity_usd:,.0f}\n"
-        f"🔗 {chain} | <a href='{signal.dex_url}'>DexScreener</a> | <a href='https://futures.mexc.com/exchange/{signal.token}_USDT'>MEXC</a>"
+        f"{desc}\n\n"
+        f"<b>Gap: {signal.spread_percent:.1f}%</b>\n"
+        f"MEXC: ${signal.mexc_price}\n"
+        f"DEX: ${signal.dex_price}\n\n"
+        f"Score: <b>{signal.quality_score}/10</b> ({quality_str})\n"
+        f"💧 Liq: {liq_str}{time_info}{funding_info}\n"
+        f"{chain} • <a href='{signal.dex_url}'>DexScreener</a> • <a href='https://futures.mexc.com/exchange/{signal.token}_USDT'>MEXC</a>"
     )
 
 

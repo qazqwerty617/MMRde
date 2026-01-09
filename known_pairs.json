@@ -3729,5 +3729,26 @@
     "dex": "uniswap",
     "verified": true,
     "updated": 1766493439
+  },
+  "NPC": {
+    "chain": "ethereum",
+    "address": "0x69C7bd26512f52bF6F76faB834140D13Dda673Ca",
+    "dex": "uniswap",
+    "verified": true,
+    "updated": 1767957519
+  },
+  "REPPO": {
+    "chain": "base",
+    "address": "0x70000C1CB3ee34a7323211607ac3162665B49549",
+    "dex": "uniswap",
+    "verified": true,
+    "updated": 1767957535
+  },
+  "WHITEWHALE": {
+    "chain": "solana",
+    "address": "4qxSqMh6iEdbdvtMp8r5MK2psAGKNk57PfGeVo2VhczQ",
+    "dex": "pumpswap",
+    "verified": true,
+    "updated": 1767993006
   }
 }

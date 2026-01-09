@@ -1,15 +1,17 @@
 """
-MMRdex Bot v3.0 - TURBO Edition
-Ultra-fast arbitrage scanner with:
+MMRdex Bot v4.0 - ULTRA INTELLIGENT Edition
+Advanced Lead-Lag arbitrage system with:
 - WebSocket real-time MEXC prices
 - Parallel DEX scanning
 - Token validation & fake detection
-- Net profit after fees
+- Funding rate calculation
+- Convergence analysis & learning
+- Momentum confirmation
+- Entry point optimization
+- ML-like token intelligence
 """
 import asyncio
 import logging
-import sys
-
 import sys
 import platform
 
@@ -19,18 +21,23 @@ from config import (
     SIGNAL_COOLDOWN_SEC,
     LOG_LEVEL
 )
-# ... imports ...
 
 # Fix for Windows Event Loop Issue (WinError 10022)
 if platform.system() == 'Windows':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-from database import init_db, get_token_stats, get_price_history
+
+from database import init_db, get_token_stats, get_db
 from mexc_client import MEXCClient
 from mexc_ws import get_ws_client
 from dexscreener_client import DexScreenerClient
 from turbo_scanner import TurboScanner, format_turbo_signal
 from spread_tracker import SpreadTracker, format_closure_message
 from bot import TelegramBot
+
+# Intelligence modules
+from funding_tracker import get_funding_tracker
+from convergence_analyzer import get_convergence_analyzer
+from token_intelligence import get_token_intelligence
 
 # Configure logging
 logging.basicConfig(
@@ -42,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 class MMRdexBot:
-    """Main bot orchestrator - TURBO edition"""
+    """Main bot orchestrator - ULTRA INTELLIGENT edition"""
     
     def __init__(self):
         self.mexc = MEXCClient()
@@ -52,11 +59,51 @@ class MMRdexBot:
         self.telegram = TelegramBot()
         self.ws = get_ws_client()
         self._running = False
+        
+        # Intelligence references
+        self.funding_tracker = get_funding_tracker()
+        self.convergence_analyzer = get_convergence_analyzer()
+        self.token_intelligence = get_token_intelligence()
+    
+    async def _initialize_intelligence(self):
+        """Initialize all intelligence modules from database and APIs"""
+        logger.info("🧠 Loading intelligence modules...")
+        
+        try:
+            # Load funding rates from MEXC API
+            await self.funding_tracker.fetch_all_funding_rates()
+            logger.info("✅ Funding rates loaded")
+        except Exception as e:
+            logger.warning(f"⚠️ Funding rates unavailable: {e}")
+        
+        try:
+            # Load historical convergence data
+            db = await get_db()
+            await self.convergence_analyzer.load_from_database()
+            logger.info("✅ Convergence analyzer loaded")
+        except Exception as e:
+            logger.warning(f"⚠️ Convergence data unavailable: {e}")
+        
+        try:
+            # Load token intelligence from history
+            db = await get_db()
+            await self.token_intelligence.load_from_database(db)
+            logger.info("✅ Token intelligence loaded")
+        except Exception as e:
+            logger.warning(f"⚠️ Token intelligence unavailable: {e}")
+        
+        # Log intelligence summary
+        recommended = self.token_intelligence.get_recommended_tokens(min_score=5.0, limit=10)
+        avoid = self.token_intelligence.get_avoid_tokens()
+        if recommended:
+            logger.info(f"🏆 Top tokens: {', '.join([t[0] for t in recommended[:5]])}")
+        if avoid:
+            logger.info(f"⛔ Avoid tokens: {', '.join(avoid[:5])}")
     
     async def start(self):
         """Start all bot components"""
         logger.info("=" * 50)
-        logger.info("🚀 MMRdex TURBO v3.0 Starting...")
+        logger.info("🚀 MMRdex ULTRA INTELLIGENT v4.0 Starting...")
         logger.info("=" * 50)
         
         # Initialize database
@@ -71,6 +118,9 @@ class MMRdexBot:
         await asyncio.sleep(3)
         logger.info(f"✅ Loaded {len(self.ws.prices)} MEXC prices")
         
+        # Initialize intelligence modules
+        await self._initialize_intelligence()
+        
         self._running = True
         
         # Start all tasks
@@ -78,6 +128,7 @@ class MMRdexBot:
             self._run_scanner(),
             self._run_tracker(),
             self._run_telegram(),
+            self._run_funding_refresh(),  # NEW: Periodic funding rate refresh
         )
     
     async def stop(self):
@@ -86,14 +137,15 @@ class MMRdexBot:
         await self.ws.close()
         await self.mexc.close()
         await self.dexscreener.close()
+        await self.funding_tracker.close()
         await self.telegram.stop()
         logger.info("Bot stopped")
     
     async def _run_scanner(self):
-        """Main scanner loop - TURBO speed"""
+        """Main scanner loop - ULTRA INTELLIGENT"""
         from chart_generator import generate_spread_chart
         
-        logger.info(f"⚡ TURBO Scanner started (interval: {SCAN_INTERVAL_SEC}s)")
+        logger.info(f"⚡ ULTRA Scanner started (interval: {SCAN_INTERVAL_SEC}s)")
         
         scan_count = 0
         signal_count = 0
@@ -103,7 +155,7 @@ class MMRdexBot:
                 scan_count += 1
                 signals = await self.scanner.scan()
                 
-                # Send notifications for new signals
+                # Send notifications for new signals (sorted by quality)
                 for signal in signals:
                     signal_count += 1
                     
@@ -114,8 +166,6 @@ class MMRdexBot:
                     # Generate chart
                     chart_image = None
                     try:
-                        # Fetch real klines from MEXC (Real-time chart)
-                        # limit=48 -> 12 hours of 15m candles
                         klines = await self.mexc.get_kline_data(signal.token, "Min15", limit=48)
                         
                         if klines:
@@ -129,13 +179,22 @@ class MMRdexBot:
                         logger.error(f"Chart error: {e}")
                     
                     await self.telegram.send_signal(message, chart_image)
-                    logger.info(f"📤 Signal sent: {signal.direction} {signal.token} +{signal.net_profit:.1f}%")
+                    logger.info(
+                        f"📤 Signal: {signal.direction} {signal.token} | "
+                        f"Net: +{signal.net_profit:.1f}% | "
+                        f"Quality: {signal.quality_score:.1f}/10"
+                    )
                     
                     await asyncio.sleep(SIGNAL_COOLDOWN_SEC)
                 
-                # Periodic stats
+                # Periodic stats with intelligence info
                 if scan_count % 100 == 0:
-                    logger.info(f"📊 Stats: {scan_count} scans, {signal_count} signals, {len(self.ws.prices)} prices")
+                    top_tokens = self.token_intelligence.get_recommended_tokens(n=3)
+                    top_str = ", ".join([f"{t[0]}({t[1]:.1f})" for t in top_tokens])
+                    logger.info(
+                        f"📊 Stats: {scan_count} scans, {signal_count} signals | "
+                        f"Top: {top_str}"
+                    )
                 
             except Exception as e:
                 logger.error(f"Scanner error: {e}")
@@ -143,7 +202,7 @@ class MMRdexBot:
             await asyncio.sleep(SCAN_INTERVAL_SEC)
     
     async def _run_tracker(self):
-        """Spread tracker loop"""
+        """Spread tracker loop with learning feedback"""
         logger.info(f"📊 Tracker started (interval: {SPREAD_CHECK_INTERVAL_SEC}s)")
         
         while self._running:
@@ -153,7 +212,10 @@ class MMRdexBot:
                 for closure in closed:
                     message = format_closure_message(closure)
                     await self.telegram.send_closure(message)
-                    logger.info(f"✅ Closed: {closure.token} - {closure.outcome}")
+                    logger.info(
+                        f"✅ Closed: {closure.token} | {closure.outcome} | "
+                        f"PnL: {closure.price_change_percent:+.1f}%"
+                    )
                 
             except Exception as e:
                 logger.error(f"Tracker error: {e}")
@@ -166,6 +228,18 @@ class MMRdexBot:
             await self.telegram.start()
         except Exception as e:
             logger.error(f"Telegram error: {e}")
+    
+    async def _run_funding_refresh(self):
+        """Periodically refresh funding rates"""
+        refresh_interval = 300  # Every 5 minutes
+        
+        while self._running:
+            await asyncio.sleep(refresh_interval)
+            try:
+                await self.funding_tracker.fetch_all_funding_rates()
+                logger.debug("Funding rates refreshed")
+            except Exception as e:
+                logger.warning(f"Funding refresh error: {e}")
 
 
 async def main():

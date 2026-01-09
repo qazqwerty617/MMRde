@@ -8,6 +8,19 @@ from typing import Optional, Literal
 from config import DATABASE_PATH, WIN_THRESHOLD, LOSE_THRESHOLD
 
 
+# Global database connection for reuse
+_db_connection = None
+
+
+async def get_db():
+    """Get reusable database connection for intelligence modules"""
+    global _db_connection
+    if _db_connection is None:
+        _db_connection = await aiosqlite.connect(DATABASE_PATH)
+        _db_connection.row_factory = aiosqlite.Row
+    return _db_connection
+
+
 async def init_db():
     """Initialize database tables"""
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -59,10 +72,28 @@ async def init_db():
             )
         """)
         
-        # Create index for fast queries by token
+        # Create indexes for fast queries
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_price_history_token 
             ON price_history(token, timestamp DESC)
+        """)
+        
+        # Index for active signals lookup
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_signals_active
+            ON signals(is_active, token, direction)
+        """)
+        
+        # Index for signal outcomes by token
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_outcomes_signal
+            ON signal_outcomes(signal_id)
+        """)
+        
+        # Index for signals by token and created_at
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_signals_token_time
+            ON signals(token, created_at DESC)
         """)
         
         await db.commit()
